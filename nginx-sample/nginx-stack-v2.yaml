@@ -7,7 +7,7 @@ spec:
   selector:
     matchLabels:
       run: nginx
-  replicas: 2
+  replicas: 3
   template:
     metadata:
       labels:
@@ -22,12 +22,33 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: my-nginx
+  name: svc-nginx
   labels:
-    run: my-nginx
+    run: svc-nginx
 spec:
   ports:
-  - port: 80
+  - name: nginx-https
+    port: 80
     protocol: TCP
+    targetPort: 443
   selector:
     run: nginx
+status:
+  loadBalancer: {}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: route-nginx
+spec:
+  host: nginx-stack.sapura.com.my
+  to:
+    kind: Service
+    name: svc-nginx
+    weight: 100
+  port:
+    targetPort: nginx-https
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
