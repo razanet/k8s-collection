@@ -29,8 +29,8 @@ spec:
     deployment: nginx-stack
   ports:
   - name: nginx-https
-    port: 8443
-    targetPort: 8443
+    port: 80
+    targetPort: 443
     protocol: TCP
 status:
   loadBalancer: {}
@@ -47,7 +47,7 @@ spec:
     name: nginx-svc
     weight: 100
   port:
-    targetPort: https
+    targetPort: nginx-https
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
