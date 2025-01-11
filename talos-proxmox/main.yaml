@@ -1,14 +1,15 @@
 ---
 - name: Deploy Talos Cluster on Proxmox
-  hosts: proxmox_host
-  gather_facts: true
-  become: true
+  hosts: localhost  # Run everything locally on your MacBook
+  gather_facts: false
   vars_files:
     - group_vars/vault.yml
   vars:
-    proxmox_node: "pve"
+    proxmox_node: "pve-bijok01"
     talos_version: "v1.5.5"
     iso_storage: "isos"
+    iso_filename: "talos-{{ talos_version }}.iso"
+    storage: "datastore01"
     talos_config_dir: "./talos-config"
     controlplane_vip: "192.168.0.200"
     gateway: "192.168.0.1"
@@ -19,45 +20,74 @@
         vm_id: "203"
         memory: "4096"
         cores: "2"
-        disk_size: "32G"
+        disk: virtio0
+        disk_size: 32G
         ip: "192.168.0.201"
       - name: "talos-cp2"
         role: "controlplane"
         vm_id: "204"
         memory: "4096"
         cores: "2"
-        disk_size: "32G"
+        disk: virtio0
+        disk_size: 32G
         ip: "192.168.0.202"
       - name: "talos-cp3"
         role: "controlplane"
         vm_id: "205"
         memory: "4096"
         cores: "2"
-        disk_size: "32G"
+        disk: virtio0
+        disk_size: 32G
         ip: "192.168.0.203"
 
   tasks:
-    - name: Download Talos ISO
-      get_url:
-        url: "https://github.com/talos-systems/talos/releases/download/{{ talos_version }}/metal-amd64.iso"
-        dest: "/tmp/talos.iso"
-      register: iso_download
+    - name: Check if Talos ISO exists on Proxmox
+      ansible.builtin.stat:
+        path: "/mnt/pve/isos/template/iso/{{ iso_filename }}"
+      register: iso_stat
 
-    - name: Upload ISO to Proxmox
-      community.general.proxmox_disk:
-        api_host: "{{ proxmox_api_host }}"
-        api_user: "{{ proxmox_api_user }}"
-        api_password: "{{ proxmox_api_password }}"
-        node: "{{ proxmox_node }}"
-        storage: "{{ iso_storage }}"
-        filename: "talos-{{ talos_version }}.iso"
-        src: "/tmp/talos.iso"
-        content: "iso"
-      when: iso_download.changed
+    - name: Download Talos ISO directly on Proxmox
+      command: |
+        wget https://github.com/talos-systems/talos/releases/download/{{ talos_version }}/metal-amd64.iso -O /mnt/pve/isos/template/iso/{{ iso_filename }}
+      become: true
+      become_user: root
+      delegate_to: "{{ proxmox_api_host }}"
+      when: not iso_stat.stat.exists
 
-    - name: Create config patches directory
-      file:
-        path: "{{ talos_config_dir }}/patches"
+    # - name: Rename ISO to "talos.iso"
+    #   command: |
+    #     mv /mnt/pve/isos/template/iso/{{ iso_filename }} /mnt/pve/isos/template/iso/talos-{{ talos_version }}.iso
+    #   become: true
+    #   when: not iso_stat.stat.exists
+    
+    # - name: Check if Talos ISO exists
+    #   ansible.builtin.stat:
+    #     path: "./talos-{{ talos_version }}.iso"
+    #   register: iso_stat
+
+    # - name: Download Talos ISO
+    #   ansible.builtin.get_url:
+    #     url: "https://github.com/talos-systems/talos/releases/download/{{ talos_version }}/metal-amd64.iso"
+    #     dest: "./talos-{{ talos_version }}.iso"
+    #   when: not iso_stat.stat.exists
+    #   register: iso_download
+      
+
+    # - name: Upload ISO to Proxmox
+    #   community.general.proxmox_disk:
+    #     api_host: "{{ proxmox_api_host }}"
+    #     api_user: "{{ proxmox_api_user }}"
+    #     api_password: "{{ proxmox_api_password }}"
+    #     node: "{{ proxmox_node }}"
+    #     storage: "{{ iso_storage }}"
+    #     filename: "talos-{{ talos_version }}.iso"
+    #     src: "./talos-{{ talos_version }}.iso"
+    #     content: "iso"
+    #   when: iso_download.changed
+
+    - name: Create Talos configuration directory
+      ansible.builtin.file:
+        path: "{{ talos_config_dir }}"
         state: directory
         mode: '0755'
 
@@ -78,7 +108,13 @@
       args:
         creates: "{{ talos_config_dir }}/controlplane.yaml"
 
-    - name: Create VMs
+    - name: Create controlplane patch for each node
+      template:
+        src: controlplane-patch.yaml.j2
+        dest: "{{ talos_config_dir }}/patches/controlplane-patch-{{ item.ip }}.yaml"
+      loop: "{{ nodes }}"
+
+    - name: Create VMs on Proxmox
       community.general.proxmox_kvm:
         api_host: "{{ proxmox_api_host }}"
         api_user: "{{ proxmox_api_user }}"
@@ -90,23 +126,28 @@
         cores: "{{ item.cores }}"
         net:
           net0: 'model=virtio,bridge=vmbr0'
+        scsi:
+          scsi0: "{{storage}}:32"
+        scsihw: "virtio-scsi-single"
+        ide: 
+          ide2: "{{iso_storage}}:iso/{{ iso_filename }},media=cdrom"
         ostype: "l26"
+        boot: "order=ide2;scsi0"
         state: present
         description: "Talos node deployed via Ansible"
       loop: "{{ nodes }}"
 
-    - name: Create and attach disks
-      community.general.proxmox_disk:
-        api_host: "{{ proxmox_api_host }}"
-        api_user: "{{ proxmox_api_user }}"
-        api_password: "{{ proxmox_api_password }}"
-        vmid: "{{ item.vm_id }}"
-        node: "{{ proxmox_node }}"
-        storage: "local-lvm"
-        size: "{{ item.disk_size }}"
-        format: raw
-        state: present
-      loop: "{{ nodes }}"
+    # - name: Attach disks to VMs
+    #   community.general.proxmox_disk:
+    #     api_host: "{{ proxmox_api_host }}"
+    #     api_user: "{{ proxmox_api_user }}"
+    #     api_password: "{{ proxmox_api_password }}"
+    #     vmid: "{{ item.vm_id }}"
+    #     disk: "{{ item.disk }}"
+    #     storage: "{{ storage }}"
+    #     size: "{{ item.disk_size }}"
+    #     state: present
+    #   loop: "{{ nodes }}"
 
     - name: Start VMs
       community.general.proxmox_kvm:
@@ -138,7 +179,7 @@
       retries: 5
       delay: 30
 
-    - name: Wait for all nodes to be ready
+    - name: Wait for all nodes to be healthy
       command: |
         talosctl --nodes {{ item.ip }} \
                 --config {{ talos_config_dir }}/talosconfig \
