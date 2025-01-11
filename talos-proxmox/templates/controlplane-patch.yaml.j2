@@ -1,0 +1,53 @@
+# templates/controlplane-patch.yaml.j2
+machine:
+  network:
+    interfaces:
+      - interface: eth0
+        dhcp: false
+        addresses:
+          - {{ item.ip }}/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: {{ gateway }}
+    nameservers:
+      - {{ dns_server }}
+  install:
+    disk: /dev/sda
+cluster:
+  apiServer:
+    certSANs:
+      - "{{ controlplane_vip }}"
+      - "127.0.0.1"
+      {% for node in nodes %}
+      - "{{ node.ip }}"
+      {% endfor %}
+  controlPlane:
+    endpoint: "https://{{ controlplane_vip }}:6443"
+  inlineManifests:
+    - name: cilium
+      contents: |
+        apiVersion: helm.cattle.io/v1
+        kind: HelmRelease
+        metadata:
+          name: cilium
+          namespace: kube-system
+        spec:
+          repo: https://helm.cilium.io/
+          chart: cilium
+          version: 1.14.4
+          targetNamespace: kube-system
+          valuesContent: |-
+            ipam:
+              mode: kubernetes
+            k8sServiceHost: {{ controlplane_vip }}
+            k8sServicePort: 6443
+            kubeProxyReplacement: strict
+            socketLB:
+              enabled: true
+  network:
+    cni:
+      name: none
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/12
