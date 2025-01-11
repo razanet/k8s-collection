@@ -1,12 +1,14 @@
 ---
-# main.yaml
 - name: Deploy Talos Cluster on Proxmox
   hosts: proxmox_host
   gather_facts: true
+  become: true
+  vars_files:
+    - group_vars/vault.yml
   vars:
     proxmox_node: "pve"
     talos_version: "v1.5.5"
-    iso_storage: "local"
+    iso_storage: "isos"
     talos_config_dir: "./talos-config"
     controlplane_vip: "192.168.0.200"
     gateway: "192.168.0.1"
@@ -14,21 +16,21 @@
     nodes:
       - name: "talos-cp1"
         role: "controlplane"
-        vm_id: "201"
+        vm_id: "203"
         memory: "4096"
         cores: "2"
         disk_size: "32G"
         ip: "192.168.0.201"
       - name: "talos-cp2"
         role: "controlplane"
-        vm_id: "202"
+        vm_id: "204"
         memory: "4096"
         cores: "2"
         disk_size: "32G"
         ip: "192.168.0.202"
       - name: "talos-cp3"
         role: "controlplane"
-        vm_id: "203"
+        vm_id: "205"
         memory: "4096"
         cores: "2"
         disk_size: "32G"
@@ -42,7 +44,7 @@
       register: iso_download
 
     - name: Upload ISO to Proxmox
-      community.general.proxmox_disk_image:
+      community.general.proxmox_disk:
         api_host: "{{ proxmox_api_host }}"
         api_user: "{{ proxmox_api_user }}"
         api_password: "{{ proxmox_api_password }}"
