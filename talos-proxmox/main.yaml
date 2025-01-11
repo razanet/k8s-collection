@@ -20,24 +20,18 @@
         vm_id: "203"
         memory: "4096"
         cores: "2"
-        disk: virtio0
-        disk_size: 32G
         ip: "192.168.0.201"
       - name: "talos-cp2"
         role: "controlplane"
         vm_id: "204"
         memory: "4096"
         cores: "2"
-        disk: virtio0
-        disk_size: 32G
         ip: "192.168.0.202"
       - name: "talos-cp3"
         role: "controlplane"
         vm_id: "205"
         memory: "4096"
         cores: "2"
-        disk: virtio0
-        disk_size: 32G
         ip: "192.168.0.203"
 
   tasks:
@@ -132,7 +126,7 @@
         ide: 
           ide2: "{{iso_storage}}:iso/{{ iso_filename }},media=cdrom"
         ostype: "l26"
-        boot: "order=ide2;scsi0"
+        cpu: host
         state: present
         description: "Talos node deployed via Ansible"
       loop: "{{ nodes }}"
