@@ -1,6 +1,5 @@
----
 - name: Deploy Talos Cluster on Proxmox
-  hosts: localhost  # Run everything locally on your MacBook
+  hosts: localhost
   gather_facts: false
   vars_files:
     - group_vars/vault.yml
@@ -14,6 +13,8 @@
     controlplane_vip: "192.168.0.200"
     gateway: "192.168.0.1"
     dns_server: "192.168.0.2"
+    ssh_public_key: "/Users/wakbijak/Nextcloud/DevOps/keys/arif.pub"
+    serial: 1
     nodes:
       - name: "talos-cp1"
         role: "controlplane"
@@ -39,6 +40,7 @@
       ansible.builtin.stat:
         path: "/mnt/pve/isos/template/iso/{{ iso_filename }}"
       register: iso_stat
+      delegate_to: "{{ proxmox_api_host }}"
 
     - name: Download Talos ISO directly on Proxmox
       command: |
@@ -48,65 +50,51 @@
       delegate_to: "{{ proxmox_api_host }}"
       when: not iso_stat.stat.exists
 
-    # - name: Rename ISO to "talos.iso"
-    #   command: |
-    #     mv /mnt/pve/isos/template/iso/{{ iso_filename }} /mnt/pve/isos/template/iso/talos-{{ talos_version }}.iso
-    #   become: true
-    #   when: not iso_stat.stat.exists
-    
-    # - name: Check if Talos ISO exists
-    #   ansible.builtin.stat:
-    #     path: "./talos-{{ talos_version }}.iso"
-    #   register: iso_stat
-
-    # - name: Download Talos ISO
-    #   ansible.builtin.get_url:
-    #     url: "https://github.com/talos-systems/talos/releases/download/{{ talos_version }}/metal-amd64.iso"
-    #     dest: "./talos-{{ talos_version }}.iso"
-    #   when: not iso_stat.stat.exists
-    #   register: iso_download
-      
-
-    # - name: Upload ISO to Proxmox
-    #   community.general.proxmox_disk:
-    #     api_host: "{{ proxmox_api_host }}"
-    #     api_user: "{{ proxmox_api_user }}"
-    #     api_password: "{{ proxmox_api_password }}"
-    #     node: "{{ proxmox_node }}"
-    #     storage: "{{ iso_storage }}"
-    #     filename: "talos-{{ talos_version }}.iso"
-    #     src: "./talos-{{ talos_version }}.iso"
-    #     content: "iso"
-    #   when: iso_download.changed
-
-    - name: Create Talos configuration directory
-      ansible.builtin.file:
-        path: "{{ talos_config_dir }}"
+    - name: Create cloud-init config directory on Proxmox
+      file:
+        path: "/var/lib/vz/snippets"
         state: directory
         mode: '0755'
+      delegate_to: "{{ proxmox_api_host }}"
+      become: true
 
-    - name: Create controlplane patch for each node
-      template:
-        src: controlplane-patch.yaml.j2
-        dest: "{{ talos_config_dir }}/patches/controlplane-patch-{{ item.ip }}.yaml"
+    - name: Generate cloud-init config for each node
+      copy:
+        dest: "/var/lib/vz/snippets/{{ item.name }}.yml"
+        content: |
+          #cloud-config
+          hostname: {{ item.name }}
+          manage_etc_hosts: true
+          users:
+            - name: talos
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              ssh_authorized_keys:
+                - {{ lookup('file', ssh_public_key) }}
+          write_files:
+            - path: /etc/systemd/network/10-static.network
+              content: |
+                [Match]
+                Name=eth0
+
+                [Network]
+                Address={{ item.ip }}/24
+                Gateway={{ gateway }}
+                DNS={{ dns_server }}
+          network:
+            version: 2
+            ethernets:
+              eth0:
+                dhcp4: false
+                addresses: [{{ item.ip }}/24]
+                gateway4: {{ gateway }}
+                nameservers:
+                  addresses: [{{ dns_server }}]
+          bootcmd:
+            - [ sh, -c, 'echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg' ]
+            - [ sh, -c, 'systemctl restart systemd-networkd' ]
       loop: "{{ nodes }}"
-
-    - name: Generate Talos configurations
-      command: |
-        talosctl gen config \
-          "{{ cluster_name }}" \
-          "https://{{ controlplane_vip }}:6443" \
-          --output-dir {{ talos_config_dir }} \
-          --with-docs=false \
-          --with-examples=false
-      args:
-        creates: "{{ talos_config_dir }}/controlplane.yaml"
-
-    - name: Create controlplane patch for each node
-      template:
-        src: controlplane-patch.yaml.j2
-        dest: "{{ talos_config_dir }}/patches/controlplane-patch-{{ item.ip }}.yaml"
-      loop: "{{ nodes }}"
+      delegate_to: "{{ proxmox_api_host }}"
+      become: true
 
     - name: Create VMs on Proxmox
       community.general.proxmox_kvm:
@@ -123,25 +111,18 @@
         scsi:
           scsi0: "{{storage}}:32"
         scsihw: "virtio-scsi-single"
-        ide: 
+        ide:
           ide2: "{{iso_storage}}:iso/{{ iso_filename }},media=cdrom"
+        cicustom: "user=local:snippets/{{ item.name }}.yml"
         ostype: "l26"
         cpu: host
         state: present
         description: "Talos node deployed via Ansible"
       loop: "{{ nodes }}"
 
-    # - name: Attach disks to VMs
-    #   community.general.proxmox_disk:
-    #     api_host: "{{ proxmox_api_host }}"
-    #     api_user: "{{ proxmox_api_user }}"
-    #     api_password: "{{ proxmox_api_password }}"
-    #     vmid: "{{ item.vm_id }}"
-    #     disk: "{{ item.disk }}"
-    #     storage: "{{ storage }}"
-    #     size: "{{ item.disk_size }}"
-    #     state: present
-    #   loop: "{{ nodes }}"
+    - name: Pause to ensure VM creation is complete
+      pause:
+        seconds: 10
 
     - name: Start VMs
       community.general.proxmox_kvm:
@@ -163,7 +144,7 @@
     - name: Apply Talos configuration to nodes
       command: |
         talosctl --nodes {{ item.ip }} \
-                --config {{ talos_config_dir }}/talosconfig \
+                --talosconfig {{ talos_config_dir }}/talosconfig \
                 apply-config \
                 --file {{ talos_config_dir }}/controlplane.yaml \
                 --config-patch @{{ talos_config_dir }}/patches/controlplane-patch-{{ item.ip }}.yaml

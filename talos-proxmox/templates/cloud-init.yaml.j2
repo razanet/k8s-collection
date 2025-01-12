@@ -1,0 +1,21 @@
+# templates/cloud-init.yaml.j2
+# Cloud-init configuration for Talos using NoCloud
+# Version: 2
+version: 2
+ethernets:
+  eth0:
+    dhcp4: false
+    dhcp6: false  # Disable IPv6 DHCP
+    addresses:
+      - {{ item.ip }}/24
+    gateway4: {{ gateway }}
+    nameservers:
+      addresses:
+        - {{ dns_server }}
+write_files:
+  - path: /etc/hostname
+    content: "{{ item.name }}"
+  - path: /etc/machine-id
+    content: "{{ item.vm_id }}"
+runcmd:
+  - echo "Talos node configuration complete."

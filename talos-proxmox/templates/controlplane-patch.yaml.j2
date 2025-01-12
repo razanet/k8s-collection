@@ -13,16 +13,24 @@ machine:
       - {{ dns_server }}
   install:
     disk: /dev/sda
+
 cluster:
   apiServer:
     certSANs:
       - "{{ controlplane_vip }}"
       - "127.0.0.1"
-      {% for node in nodes %}
+{% for node in nodes %}
       - "{{ node.ip }}"
-      {% endfor %}
+{% endfor %}
   controlPlane:
     endpoint: "https://{{ controlplane_vip }}:6443"
+  network:
+    cni:
+      name: none
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/12
   inlineManifests:
     - name: cilium
       contents: |
@@ -44,10 +52,3 @@ cluster:
             kubeProxyReplacement: strict
             socketLB:
               enabled: true
-  network:
-    cni:
-      name: none
-    podSubnets:
-      - 10.244.0.0/16
-    serviceSubnets:
-      - 10.96.0.0/12
